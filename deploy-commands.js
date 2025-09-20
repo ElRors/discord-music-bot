@@ -22,9 +22,9 @@ async function deployCommands() {
     try {
         console.log(`🔄 Registrando ${commands.length} comandos de aplicación...`);
 
-        // Registrar comandos para servidor específico (instantáneo)
+        // Registrar comandos globalmente (más estables)
         const data = await rest.put(
-            Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+            Routes.applicationCommands(process.env.CLIENT_ID),
             { body: commands },
         );
 

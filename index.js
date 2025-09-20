@@ -38,14 +38,21 @@ client.once('ready', () => {
 
 // Manejar comandos
 client.on('interactionCreate', async interaction => {
+    console.log(`🔍 Interacción recibida: ${interaction.commandName || 'sin comando'}`);
+    
     if (!interaction.isChatInputCommand()) return;
 
     const command = client.commands.get(interaction.commandName);
 
-    if (!command) return;
+    if (!command) {
+        console.log(`❌ Comando no encontrado: ${interaction.commandName}`);
+        return;
+    }
 
     try {
+        console.log(`⚡ Ejecutando comando: ${interaction.commandName}`);
         await command.execute(interaction);
+        console.log(`✅ Comando ejecutado exitosamente: ${interaction.commandName}`);
     } catch (error) {
         console.error('Error ejecutando comando:', error);
         await interaction.reply({ 

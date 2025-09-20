@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -6,22 +6,32 @@ module.exports = {
         .setDescription('Salta a la siguiente canción en la cola'),
 
     async execute(interaction) {
-        const voiceConnection = interaction.client.voiceConnections.get(interaction.guild.id);
-        const queue = interaction.client.musicQueues?.get(interaction.guild.id);
-
-        if (!voiceConnection) {
+        // Verificar si hay música reproduciéndose
+        if (!global.audioPlayer || !global.currentConnection) {
             return await interaction.reply('❌ No hay música reproduciéndose actualmente.');
         }
 
-        if (!queue || queue.length <= 1) {
+        // Verificar si hay más canciones en la cola
+        if (!global.musicQueue || global.musicQueue.length === 0) {
             return await interaction.reply('❌ No hay más canciones en la cola para saltar.');
         }
 
         try {
-            // Detener la canción actual (esto activará el evento 'idle' que reproduce la siguiente)
-            voiceConnection.player.stop();
+            const nextSong = global.musicQueue[0]; // La siguiente canción
             
-            await interaction.reply('⏭️ Saltando a la siguiente canción...');
+            // Detener la canción actual (esto activará el evento 'idle' que reproduce la siguiente)
+            global.audioPlayer.stop();
+            
+            const embed = new EmbedBuilder()
+                .setColor('#FF6B35')
+                .setTitle('⏭️ Canción Saltada')
+                .addFields(
+                    { name: '⏭️ Saltando a', value: nextSong?.title || 'Canción desconocida', inline: false },
+                    { name: '📊 Canciones restantes', value: global.musicQueue.length.toString(), inline: true }
+                )
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [embed] });
 
         } catch (error) {
             console.error('Error al saltar canción:', error);
