@@ -1,0 +1,35 @@
+# Archivos de configuración sensibles
+.env
+.env.local
+.env.production
+
+# Dependencias de Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+
+# Archivos temporales
+temp/
+tmp/
+
+# Archivos de respaldo
+*.bak
+*.tmp
+
+# Archivos específicos del proyecto
+config.json
