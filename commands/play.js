@@ -144,6 +144,55 @@ async function handleSpotifyPlaylist(playlistId) {
     }
 }
 
+// Función para manejar álbumes de Spotify
+async function handleSpotifyAlbum(albumId) {
+    try {
+        await authenticateSpotify();
+        const album = await spotify.getAlbum(albumId);
+        const albumData = album.body;
+        
+        const tracks = [];
+        const items = albumData.tracks.items;
+        
+        console.log(`💿 Procesando álbum de Spotify: ${albumData.name} por ${albumData.artists[0].name} (${items.length} canciones)`);
+        
+        for (let i = 0; i < items.length; i++) { // Procesar todas las canciones del álbum
+            const track = items[i];
+            if (track && track.type === 'track') {
+                try {
+                    const searchQuery = `${albumData.artists[0].name} ${track.name}`;
+                    const searchResults = await YouTubeSearchAPI.GetListByKeyword(searchQuery, false, 1);
+                    
+                    if (searchResults.items && searchResults.items.length > 0) {
+                        const youtubeUrl = `https://www.youtube.com/watch?v=${searchResults.items[0].id}`;
+                        
+                        tracks.push({
+                            url: youtubeUrl,
+                            title: track.name,
+                            artist: albumData.artists[0].name,
+                            duration: Math.floor(track.duration_ms / 1000),
+                            isSpotify: true,
+                            thumbnailUrl: albumData.images[0]?.url
+                        });
+                    }
+                } catch (error) {
+                    console.error(`Error al procesar track ${i + 1} del álbum:`, error);
+                }
+            }
+        }
+        
+        return {
+            tracks,
+            albumName: albumData.name,
+            artistName: albumData.artists[0].name,
+            albumUrl: albumData.external_urls.spotify
+        };
+    } catch (error) {
+        console.error('Error al procesar álbum de Spotify:', error);
+        throw error;
+    }
+}
+
 // Función para crear botones de control de música
 function createMusicControls() {
     return new ActionRowBuilder()
@@ -329,6 +378,37 @@ module.exports = {
                     
                     await interaction.editReply({
                         content: `✅ Agregadas ${playlistData.tracks.length} canciones de la playlist **${playlistData.playlistName}** a la cola.`
+                    });
+                    
+                    // Si no hay nada reproduciéndose, empezar
+                    if (!global.currentConnection) {
+                        playNextSong(voiceChannel, interaction.channel);
+                    }
+                    
+                    return;
+                    
+                } else if (query.includes('/album/')) {
+                    console.log('💿 Procesando álbum de Spotify...');
+                    await interaction.editReply('💿 Procesando álbum de Spotify...');
+                    
+                    const albumData = await handleSpotifyAlbum(spotifyId);
+                    
+                    if (albumData.tracks.length === 0) {
+                        return await interaction.editReply('❌ No se pudo procesar el álbum.');
+                    }
+                    
+                    // Inicializar o obtener la cola
+                    if (!global.musicQueue) {
+                        global.musicQueue = [];
+                        global.guildSettings = global.guildSettings || {};
+                        global.guildSettings[interaction.guild.id] = { shuffle: false };
+                    }
+                    
+                    // Agregar todas las canciones a la cola
+                    global.musicQueue.push(...albumData.tracks);
+                    
+                    await interaction.editReply({
+                        content: `✅ Agregadas ${albumData.tracks.length} canciones del álbum **${albumData.albumName}** por **${albumData.artistName}** a la cola.`
                     });
                     
                     // Si no hay nada reproduciéndose, empezar
