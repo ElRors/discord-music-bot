@@ -1,47 +1,15 @@
-const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const ytdl = require('@distube/ytdl-core');
 const YouTubeSearchAPI = require('youtube-search-api');
 const SpotifyWebApi = require('spotify-web-api-node');
-const play = require('play-dl');
+const musicState = require('../utils/musicState');
 
 // Configurar Spotify API
 const spotify = new SpotifyWebApi({
     clientId: process.env.SPOTIFY_CLIENT_ID,
     clientSecret: process.env.SPOTIFY_CLIENT_SECRET
 });
-
-// Función auxiliar para crear stream de audio con respaldo
-async function createAudioStream(url) {
-    try {
-        // Intentar primero con ytdl-core
-        console.log('🎵 Intentando con ytdl-core...');
-        const stream = ytdl(url, {
-            filter: 'audioonly',
-            quality: 'highestaudio',
-            requestOptions: {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
-            }
-        });
-        
-        return createAudioResource(stream);
-    } catch (error) {
-        console.log('❌ ytdl-core falló, intentando con play-dl...');
-        try {
-            const stream = await play.stream(url, { 
-                quality: 2 // alta calidad
-            });
-            return createAudioResource(stream.stream, {
-                inputType: stream.type
-            });
-        } catch (playDlError) {
-            console.error('❌ Ambos métodos fallaron:', playDlError);
-            throw playDlError;
-        }
-    }
-}
 
 // Función auxiliar para autenticar Spotify
 async function authenticateSpotify() {
@@ -65,12 +33,6 @@ function extractSpotifyId(url) {
     return match ? match[1] : null;
 }
 
-// Función auxiliar para detectar playlists especiales de Spotify
-function isSpotifySpecialPlaylist(playlistId) {
-    // Playlists de Spotify que empiezan con 37i9dQZF1 suelen ser especiales
-    return playlistId.startsWith('37i9dQZF1');
-}
-
 // Función para manejar tracks de Spotify
 async function handleSpotifyTrack(trackId) {
     try {
@@ -80,6 +42,7 @@ async function handleSpotifyTrack(trackId) {
         
         // Buscar en YouTube usando metadatos de Spotify
         const searchQuery = `${trackData.artists[0].name} ${trackData.name}`;
+        console.log(`🔍 [PLAY] Buscando en YouTube: ${searchQuery}`);
         const searchResults = await YouTubeSearchAPI.GetListByKeyword(searchQuery, false, 1);
         
         if (searchResults.items && searchResults.items.length > 0) {
@@ -87,11 +50,12 @@ async function handleSpotifyTrack(trackId) {
             
             return {
                 url: youtubeUrl,
-                title: trackData.name,
+                title: `${trackData.artists[0].name} - ${trackData.name}`,
                 artist: trackData.artists[0].name,
                 duration: Math.floor(trackData.duration_ms / 1000),
                 isSpotify: true,
-                thumbnailUrl: trackData.album.images[0]?.url
+                source: 'SPOTIFY→YT',
+                requestedBy: 'Usuario'
             };
         }
         
@@ -102,501 +66,235 @@ async function handleSpotifyTrack(trackId) {
     }
 }
 
-// Función para manejar playlists de Spotify
-async function handleSpotifyPlaylist(playlistId) {
+// Función auxiliar para manejar búsquedas de YouTube por texto
+async function handleYouTubeSearch(searchQuery) {
     try {
-        console.log(`🔍 Intentando procesar playlist ID: ${playlistId}`);
-        await authenticateSpotify();
-        console.log('✅ Autenticación de Spotify exitosa');
+        console.log(`🔍 [PLAY] Buscando en YouTube: ${searchQuery}`);
+        const searchResults = await YouTubeSearchAPI.GetListByKeyword(searchQuery, false, 1);
         
-        const playlist = await spotify.getPlaylist(playlistId);
-        const playlistData = playlist.body;
-        console.log(`📋 Playlist obtenida: ${playlistData.name}`);
-        
-        const tracks = [];
-        const items = playlistData.tracks.items;
-        
-        console.log(`🎧 Procesando playlist de Spotify: ${playlistData.name} (${items.length} canciones)`);
-        
-        for (let i = 0; i < Math.min(items.length, 50); i++) { // Límite de 50 canciones
-            const track = items[i].track;
-            if (track && track.type === 'track') {
-                try {
-                    const searchQuery = `${track.artists[0].name} ${track.name}`;
-                    console.log(`🔍 Buscando: ${searchQuery}`);
-                    const searchResults = await YouTubeSearchAPI.GetListByKeyword(searchQuery, false, 1);
-                    
-                    if (searchResults.items && searchResults.items.length > 0) {
-                        const youtubeUrl = `https://www.youtube.com/watch?v=${searchResults.items[0].id}`;
-                        
-                        tracks.push({
-                            url: youtubeUrl,
-                            title: track.name,
-                            artist: track.artists[0].name,
-                            duration: Math.floor(track.duration_ms / 1000),
-                            isSpotify: true,
-                            thumbnailUrl: track.album.images[0]?.url
-                        });
-                        console.log(`✅ Track ${i + 1} procesado: ${track.name}`);
-                    } else {
-                        console.log(`❌ No se encontró en YouTube: ${searchQuery}`);
-                    }
-                } catch (error) {
-                    console.error(`❌ Error al procesar track ${i + 1} (${track.name}):`, error.message);
-                }
-            }
+        if (searchResults.items && searchResults.items.length > 0) {
+            const video = searchResults.items[0];
+            const youtubeUrl = `https://www.youtube.com/watch?v=${video.id}`;
+            
+            return {
+                url: youtubeUrl,
+                title: video.title,
+                source: 'YT-SEARCH',
+                requestedBy: 'Usuario'
+            };
         }
         
-        console.log(`✅ Procesamiento completado: ${tracks.length} tracks exitosos de ${items.length} totales`);
-        return {
-            tracks,
-            playlistName: playlistData.name,
-            playlistUrl: playlistData.external_urls.spotify
-        };
+        throw new Error('No se encontraron resultados para la búsqueda');
     } catch (error) {
-        console.error('❌ Error detallado al procesar playlist de Spotify:', error);
-        if (error.statusCode === 404) {
-            throw new Error('Playlist no encontrada o es privada');
-        } else if (error.statusCode === 401) {
-            throw new Error('Error de autenticación con Spotify');
-        } else if (error.statusCode === 429) {
-            throw new Error('Límite de tasa excedido, intenta de nuevo en un momento');
-        } else {
-            throw new Error(`Error de Spotify: ${error.message || 'Error desconocido'}`);
-        }
-    }
-}
-
-// Función para manejar álbumes de Spotify
-async function handleSpotifyAlbum(albumId) {
-    try {
-        await authenticateSpotify();
-        const album = await spotify.getAlbum(albumId);
-        const albumData = album.body;
-        
-        const tracks = [];
-        const items = albumData.tracks.items;
-        
-        console.log(`💿 Procesando álbum de Spotify: ${albumData.name} por ${albumData.artists[0].name} (${items.length} canciones)`);
-        
-        for (let i = 0; i < items.length; i++) { // Procesar todas las canciones del álbum
-            const track = items[i];
-            if (track && track.type === 'track') {
-                try {
-                    const searchQuery = `${albumData.artists[0].name} ${track.name}`;
-                    const searchResults = await YouTubeSearchAPI.GetListByKeyword(searchQuery, false, 1);
-                    
-                    if (searchResults.items && searchResults.items.length > 0) {
-                        const youtubeUrl = `https://www.youtube.com/watch?v=${searchResults.items[0].id}`;
-                        
-                        tracks.push({
-                            url: youtubeUrl,
-                            title: track.name,
-                            artist: albumData.artists[0].name,
-                            duration: Math.floor(track.duration_ms / 1000),
-                            isSpotify: true,
-                            thumbnailUrl: albumData.images[0]?.url
-                        });
-                    }
-                } catch (error) {
-                    console.error(`Error al procesar track ${i + 1} del álbum:`, error);
-                }
-            }
-        }
-        
-        return {
-            tracks,
-            albumName: albumData.name,
-            artistName: albumData.artists[0].name,
-            albumUrl: albumData.external_urls.spotify
-        };
-    } catch (error) {
-        console.error('Error al procesar álbum de Spotify:', error);
+        console.error('Error al buscar en YouTube:', error);
         throw error;
     }
 }
 
-// Función para crear botones de control de música
-function createMusicControls() {
-    return new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('music_skip')
-                .setLabel('⏭️ Skip')
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId('music_pause')
-                .setLabel('⏸️ Pausar')
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId('music_resume')
-                .setLabel('▶️ Reanudar')
-                .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-                .setCustomId('music_queue')
-                .setLabel('📋 Cola')
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId('music_stop')
-                .setLabel('⏹️ Detener')
-                .setStyle(ButtonStyle.Danger)
-        );
-}
-
-// Función para reproducir la siguiente canción de la cola
-async function playNextSong(voiceChannel, textChannel) {
-    if (!global.musicQueue || global.musicQueue.length === 0) {
-        console.log('❌ No hay canciones en la cola');
-        global.currentConnection = null;
-        return;
-    }
-
-    const song = global.musicQueue.shift();
-    global.currentSong = song; // Actualizar la canción actual inmediatamente
-    
+// Función auxiliar para crear stream de audio con respaldo
+async function createAudioStream(url) {
     try {
-        console.log(`🎵 Reproduciendo: ${song.title}`);
-        console.log(`🔗 URL: ${song.url}`);
-        
-        console.log('🔌 Conectando al canal de voz...');
-        const connection = joinVoiceChannel({
-            channelId: voiceChannel.id,
-            guildId: voiceChannel.guild.id,
-            adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-            selfDeaf: true, // Agregamos esto para mejor compatibilidad
+        // Intentar primero con ytdl-core
+        console.log('🎵 [PLAY] Intentando con ytdl-core...');
+        const stream = ytdl(url, {
+            filter: 'audioonly',
+            quality: 'highestaudio',
+            requestOptions: {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            }
         });
-
-        global.currentConnection = connection;
-        console.log('✅ Conectado al canal de voz');
-
-        // Usar reproductor global o crear uno nuevo
-        if (!global.audioPlayer) {
-            console.log('🎵 Creando reproductor global...');
-            global.audioPlayer = createAudioPlayer();
-            
-            // Configurar eventos una sola vez
-            global.audioPlayer.on(AudioPlayerStatus.Idle, () => {
-                console.log('🎵 Canción terminada, reproduciendo siguiente...');
-                console.log(`📝 Canciones restantes en cola: ${global.musicQueue ? global.musicQueue.length : 0}`);
-                
-                // Verificar si hay más canciones
-                if (!global.musicQueue || global.musicQueue.length === 0) {
-                    console.log('⏰ No hay más canciones, iniciando timer de inactividad');
-                    // Iniciar timer de inactividad si no hay más canciones
-                    if (typeof global.startInactivityTimer === 'function') {
-                        global.startInactivityTimer();
-                    }
-                } else {
-                    // Hay más canciones, reproducir la siguiente
-                    setTimeout(() => {
-                        if (global.lastVoiceChannel && global.lastTextChannel) {
-                            playNextSong(global.lastVoiceChannel, global.lastTextChannel);
-                        }
-                    }, 1000);
-                }
-            });
-
-            global.audioPlayer.on(AudioPlayerStatus.Playing, () => {
-                console.log('▶️ Estado: Reproduciendo');
-                
-                // Cancelar timer de inactividad cuando se está reproduciendo
-                if (typeof global.cancelInactivityTimer === 'function') {
-                    global.cancelInactivityTimer();
-                }
-                
-                // Mostrar controles solo si no se han mostrado recientemente
-                if (!global.lastControlsShown || Date.now() - global.lastControlsShown > 10000) {
-                    if (global.lastTextChannel && global.currentSong) {
-                        showMusicControls(global.lastTextChannel, global.currentSong);
-                        global.lastControlsShown = Date.now();
-                    }
-                }
-            });
-
-            global.audioPlayer.on('error', error => {
-                console.error('❌ Error reproductor:', error);
-                console.error('Tipo de error:', error.name);
-                console.error('Mensaje:', error.message);
-                
-                // Intentar recuperarse de errores de stream interrumpido
-                if (error.message && error.message.includes('aborted') && global.currentSong) {
-                    // Incrementar contador de reintentos para esta canción
-                    if (!global.currentSong.retryCount) {
-                        global.currentSong.retryCount = 0;
-                    }
-                    global.currentSong.retryCount++;
-                    
-                    console.log(`🔄 Stream interrumpido, intento ${global.currentSong.retryCount}/3 para: ${global.currentSong.title}`);
-                    
-                    // Máximo 3 intentos antes de saltar a la siguiente canción
-                    if (global.currentSong.retryCount <= 3) {
-                        console.log('⏳ Reintentando reproducir la canción...');
-                        setTimeout(() => {
-                            if (global.lastVoiceChannel && global.lastTextChannel && global.currentSong) {
-                                // Reintentar la misma canción
-                                playSong(global.lastVoiceChannel, global.lastTextChannel, global.currentSong);
-                            }
-                        }, 2000);
-                        return;
-                    } else {
-                        console.log('❌ Máximo de reintentos alcanzado, saltando a la siguiente canción');
-                        global.lastTextChannel.send('⚠️ No se pudo reproducir la canción después de varios intentos, saltando a la siguiente...');
-                    }
-                }
-                
-                // Para otros errores o después de agotar reintentos, saltar a la siguiente canción
-                setTimeout(() => {
-                    if (global.lastVoiceChannel && global.lastTextChannel) {
-                        playNextSong(global.lastVoiceChannel, global.lastTextChannel);
-                    }
-                }, 1000);
-            });
-        }
-
-        // Guardar referencias para los callbacks
-        global.lastVoiceChannel = voiceChannel;
-        global.lastTextChannel = textChannel;
-        global.currentSong = song; // Guardar la canción actual
-
-        console.log('🎵 Creando stream de audio...');
-        // Usar la nueva función de stream con respaldo
-        const resource = await createAudioStream(song.url);
-        console.log('✅ Stream de audio creado');
-
-        console.log('▶️ Iniciando reproducción...');
-        global.audioPlayer.play(resource);
-        connection.subscribe(global.audioPlayer);
-        console.log('✅ Reproductor conectado');
-
+        
+        return createAudioResource(stream);
     } catch (error) {
-        console.error('❌ Error al reproducir:', error);
-        setTimeout(() => {
-            playNextSong(voiceChannel, textChannel);
-        }, 1000);
+        console.log('❌ [PLAY] ytdl-core falló, intentando con play-dl...');
+        try {
+            const play = require('play-dl');
+            const stream = await play.stream(url, { 
+                quality: 2 // alta calidad
+            });
+            return createAudioResource(stream.stream, {
+                inputType: stream.type
+            });
+        } catch (playDlError) {
+            console.error('❌ [PLAY] Ambos métodos fallaron:', playDlError);
+            throw playDlError;
+        }
     }
 }
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Reproduce música de YouTube o Spotify')
+        .setDescription('Reproduce música desde Spotify, YouTube o búsqueda por texto')
         .addStringOption(option =>
             option.setName('cancion')
-                .setDescription('Nombre de canción, URL de YouTube o URL de Spotify')
+                .setDescription('URL de Spotify/YouTube o nombre de la canción')
                 .setRequired(true)),
 
     async execute(interaction) {
         const query = interaction.options.getString('cancion');
         const voiceChannel = interaction.member.voice.channel;
 
+        console.log(`🎵 [PLAY] Iniciando comando con: ${query}`);
+
         if (!voiceChannel) {
             return await interaction.reply('❌ Debes estar en un canal de voz!');
         }
 
-        await interaction.deferReply();
+        // Responder inmediatamente para evitar timeout
+        await interaction.reply('🎵 Procesando canción...');
 
         try {
-            console.log(`🎵 Comando recibido: ${query}`);
-            console.log(`🔍 Verificando si es URL de Spotify: ${isSpotifyUrl(query)}`);
-            
-            // Detectar si es una URL de Spotify
+            let song;
+
+            // Procesar según el tipo de URL
             if (isSpotifyUrl(query)) {
-                console.log('🎧 Detectada URL de Spotify');
+                console.log('🎧 [PLAY] Detectada URL de Spotify');
                 const spotifyId = extractSpotifyId(query);
                 
                 if (!spotifyId) {
                     return await interaction.editReply('❌ URL de Spotify inválida.');
                 }
                 
-                // Verificar si es una playlist especial de Spotify
-                if (query.includes('/playlist/') && isSpotifySpecialPlaylist(spotifyId)) {
-                    return await interaction.editReply('❌ Esta playlist de Spotify (Daily Mix, Discover Weekly, etc.) no está disponible a través de la API pública. Prueba con una playlist de usuario normal o un álbum.');
-                }
-                
-                // Verificar si es playlist o track
-                if (query.includes('/playlist/')) {
-                    console.log('📝 Procesando playlist de Spotify...');
-                    await interaction.editReply('🎧 Procesando playlist de Spotify...');
-                    
-                    try {
-                        const playlistData = await handleSpotifyPlaylist(spotifyId);
-                        
-                        if (playlistData.tracks.length === 0) {
-                            return await interaction.editReply('❌ No se encontraron canciones válidas en la playlist. Puede que sea privada o las canciones no estén disponibles.');
-                        }
-                        
-                        // Inicializar o obtener la cola
-                        if (!global.musicQueue) {
-                            global.musicQueue = [];
-                            global.guildSettings = global.guildSettings || {};
-                            global.guildSettings[interaction.guild.id] = { shuffle: false };
-                        }
-                        
-                        // Agregar todas las canciones a la cola
-                        global.musicQueue.push(...playlistData.tracks);
-                        
-                        await interaction.editReply({
-                            content: `✅ Agregadas ${playlistData.tracks.length} canciones de la playlist **${playlistData.playlistName}** a la cola.`
-                        });
-                        
-                        // Si no hay nada reproduciéndose, empezar
-                        if (!global.currentConnection) {
-                            playNextSong(voiceChannel, interaction.channel);
-                        }
-                        
-                        return;
-                        
-                    } catch (error) {
-                        console.error('❌ Error específico de playlist:', error);
-                        return await interaction.editReply(`❌ Error al procesar playlist de Spotify: ${error.message}`);
-                    }
-                    
-                } else if (query.includes('/album/')) {
-                    console.log('💿 Procesando álbum de Spotify...');
-                    await interaction.editReply('💿 Procesando álbum de Spotify...');
-                    
-                    const albumData = await handleSpotifyAlbum(spotifyId);
-                    
-                    if (albumData.tracks.length === 0) {
-                        return await interaction.editReply('❌ No se pudo procesar el álbum.');
-                    }
-                    
-                    // Inicializar o obtener la cola
-                    if (!global.musicQueue) {
-                        global.musicQueue = [];
-                        global.guildSettings = global.guildSettings || {};
-                        global.guildSettings[interaction.guild.id] = { shuffle: false };
-                    }
-                    
-                    // Agregar todas las canciones a la cola
-                    global.musicQueue.push(...albumData.tracks);
-                    
-                    await interaction.editReply({
-                        content: `✅ Agregadas ${albumData.tracks.length} canciones del álbum **${albumData.albumName}** por **${albumData.artistName}** a la cola.`
-                    });
-                    
-                    // Si no hay nada reproduciéndose, empezar
-                    if (!global.currentConnection) {
-                        playNextSong(voiceChannel, interaction.channel);
-                    }
-                    
-                    return;
-                    
-                } else if (query.includes('/track/')) {
-                    console.log('🎵 Procesando track de Spotify...');
+                if (query.includes('/track/')) {
                     await interaction.editReply('🎧 Procesando track de Spotify...');
-                    
-                    const trackData = await handleSpotifyTrack(spotifyId);
-                    
-                    // Inicializar cola si no existe
-                    if (!global.musicQueue) {
-                        global.musicQueue = [];
-                        global.guildSettings = global.guildSettings || {};
-                        global.guildSettings[interaction.guild.id] = { shuffle: false };
-                    }
-                    
-                    global.musicQueue.push(trackData);
-                    
-                    await interaction.editReply({
-                        content: `✅ **${trackData.title}** por **${trackData.artist}** agregada a la cola.`
-                    });
-                    
-                    // Si no hay nada reproduciéndose, empezar
-                    if (!global.currentConnection) {
-                        playNextSong(voiceChannel, interaction.channel);
-                    }
-                    
-                    return;
-                }
-            }
-            
-            // Lógica original para YouTube
-            let videoUrl = query;
-
-            // Si no es URL de YouTube, buscar
-            if (!ytdl.validateURL(query)) {
-                console.log('🔍 Buscando en YouTube...');
-                const searchResults = await YouTubeSearchAPI.GetListByKeyword(query, false, 1);
-                
-                if (!searchResults.items || searchResults.items.length === 0) {
-                    return await interaction.editReply('❌ No encontré nada.');
+                    song = await handleSpotifyTrack(spotifyId);
+                } else {
+                    return await interaction.editReply('❌ Solo se soportan tracks individuales en este comando.');
                 }
                 
-                videoUrl = `https://www.youtube.com/watch?v=${searchResults.items[0].id}`;
-                console.log(`✅ Encontrado: ${videoUrl}`);
+            } else if (ytdl.validateURL(query)) {
+                console.log('🎵 [PLAY] URL de YouTube detectada');
+                await interaction.editReply('🎵 Procesando video de YouTube...');
+                const videoInfo = await ytdl.getInfo(query);
+                song = {
+                    title: videoInfo.videoDetails.title,
+                    url: query,
+                    source: 'YT',
+                    requestedBy: interaction.user.tag
+                };
+            } else {
+                // Búsqueda por texto en YouTube
+                console.log('🔍 [PLAY] Búsqueda por texto detectada');
+                await interaction.editReply('🔍 Buscando en YouTube...');
+                song = await handleYouTubeSearch(query);
             }
 
-            // Validar URL
-            if (!ytdl.validateURL(videoUrl)) {
-                return await interaction.editReply('❌ URL no válida.');
+            console.log(`🎵 [PLAY] Canción procesada: ${song.title}`);
+
+            // Inicializar cola si no existe
+            if (!global.musicQueue) {
+                global.musicQueue = [];
             }
 
-            console.log(`🎵 Obteniendo info del video...`);
-            const videoInfo = await ytdl.getInfo(videoUrl);
-            const videoTitle = videoInfo.videoDetails.title;
+            global.musicQueue.push(song);
 
-            console.log(`🎵 Conectando a canal de voz...`);
-            const connection = joinVoiceChannel({
-                channelId: voiceChannel.id,
-                guildId: interaction.guild.id,
-                adapterCreator: interaction.guild.voiceAdapterCreator,
-                selfDeaf: true, // Agregamos esto para mejor compatibilidad
-            });
+            await interaction.editReply(`✅ **${song.title}** agregada a la cola.`);
 
-            console.log(`🎵 Creando reproductor...`);
-            const player = createAudioPlayer();
-            
-            // Usar la nueva función de stream con respaldo
-            const resource = await createAudioStream(videoUrl);
-
-            console.log(`🎵 Iniciando reproducción...`);
-            player.play(resource);
-            connection.subscribe(player);
-
-            player.on(AudioPlayerStatus.Playing, () => {
-                console.log(`▶️ Reproduciendo: ${videoTitle}`);
-            });
-
-            player.on('error', error => {
-                console.error('❌ Error reproductor:', error);
-            });
-
-            await interaction.editReply({
-                content: `🎵 **Reproduciendo:** ${videoTitle}`,
-                components: [createMusicControls()]
-            });
+            // Si no hay nada reproduciéndose, empezar reproducción
+            if (!global.currentConnection) {
+                console.log(`🎵 [PLAY] Iniciando reproducción directa...`);
+                await startPlayback(voiceChannel, interaction.channel, song);
+            }
 
         } catch (error) {
-            console.error('❌ Error general:', error);
-            await interaction.editReply('❌ Error al reproducir música.');
+            console.error('❌ [PLAY] Error:', error);
+            await interaction.editReply('❌ Error al procesar la música: ' + error.message);
         }
     },
 };
 
-// Función helper para mostrar controles automáticamente
-async function showMusicControls(textChannel, songInfo = null) {
+// Función simplificada para iniciar reproducción
+async function startPlayback(voiceChannel, textChannel, song) {
     try {
-        if (!textChannel) {
-            console.log('❌ No hay canal de texto para mostrar controles');
-            return;
-        }
-
-        let message = '🎵 **Controles de Música**';
+        console.log(`🎵 [PLAY] Conectando al canal de voz: ${voiceChannel.name}`);
         
-        if (songInfo) {
-            const title = songInfo.title || 'Título desconocido';
-            const artist = songInfo.artist ? ` por **${songInfo.artist}**` : '';
-            const source = songInfo.isSpotify ? '[SPOTIFY→YT]' : '[YOUTUBE]';
-            message = `🎵 **Reproduciendo:** ${title}${artist} ${source}`;
-        }
-
-        await textChannel.send({
-            content: message,
-            components: [createMusicControls()]
+        const connection = joinVoiceChannel({
+            channelId: voiceChannel.id,
+            guildId: voiceChannel.guild.id,
+            adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+            selfDeaf: true,
         });
+
+        global.currentConnection = connection;
+        global.lastVoiceChannel = voiceChannel;
+        global.lastTextChannel = textChannel;
+        // Guardar la canción que se va a reproducir en una variable global temporal
+        global.pendingSong = song;
+
+        console.log(`🎵 [PLAY] Creando stream de audio...`);
+        const resource = await createAudioStream(song.url);
+
+        // Usar reproductor global o crear uno nuevo
+        if (!global.audioPlayer) {
+            console.log('🎵 [PLAY] Creando reproductor global...');
+            global.audioPlayer = createAudioPlayer();
+            
+            // Configurar eventos una sola vez
+            global.audioPlayer.on(AudioPlayerStatus.Idle, async () => {
+                console.log('🎵 [PLAY] Canción terminada, verificando siguiente...');
+                
+                // Reproducir siguiente canción de la cola si hay alguna
+                if (global.musicQueue && global.musicQueue.length > 0) {
+                    console.log('▶️ [PLAY] Reproduciendo siguiente de la cola...');
+                    const nextSong = global.musicQueue.shift();
+                    // No actualizar currentSong aquí - se actualizará en el evento Playing
+                    await startPlayback(voiceChannel, textChannel, nextSong);
+                } else {
+                    console.log('⏰ [PLAY] No hay más canciones - iniciando timer inactividad');
+                    global.currentSong = null;
+                    if (typeof global.startInactivityTimer === 'function') {
+                        global.startInactivityTimer();
+                    }
+                }
+            });
+
+            global.audioPlayer.on(AudioPlayerStatus.Playing, () => {
+                // Usar la canción pendiente en lugar de la variable del closure
+                if (global.pendingSong) {
+                    global.currentSong = global.pendingSong;
+                    console.log(`▶️ [PLAY] Reproduciendo: ${global.currentSong.title}`);
+                    console.log(`🎵 [PLAY] Estado actualizado - currentSong: ${global.currentSong.title}`);
+                    console.log(`🎵 [PLAY] Fuente: ${global.currentSong.source}`);
+                    // Limpiar la canción pendiente ya que se asignó a currentSong
+                    global.pendingSong = null;
+                } else {
+                    console.log(`⚠️ [PLAY] No hay canción pendiente cuando empezó a reproducir`);
+                }
+                
+                // Cancelar timer de inactividad cuando se está reproduciendo
+                if (typeof global.cancelInactivityTimer === 'function') {
+                    global.cancelInactivityTimer();
+                }
+            });
+
+            global.audioPlayer.on('error', error => {
+                console.error('❌ [PLAY] Error reproductor:', error);
+                
+                // Intentar reproducir la siguiente canción si hay alguna
+                if (global.musicQueue && global.musicQueue.length > 0) {
+                    setTimeout(() => {
+                        if (global.lastVoiceChannel && global.lastTextChannel) {
+                            const nextSong = global.musicQueue.shift();
+                            // No actualizar currentSong aquí - se actualizará en el evento Playing
+                            startPlayback(global.lastVoiceChannel, global.lastTextChannel, nextSong);
+                        }
+                    }, 2000);
+                }
+            });
+        }
+
+        console.log(`▶️ [PLAY] Iniciando reproducción...`);
+        global.audioPlayer.play(resource);
+        connection.subscribe(global.audioPlayer);
         
-        console.log('✅ Controles automáticos enviados');
+        await textChannel.send(`🎵 **Reproduciendo:** ${song.title}`);
+        console.log(`✅ [PLAY] Reproducción iniciada exitosamente`);
+
     } catch (error) {
-        console.error('❌ Error enviando controles automáticos:', error);
+        console.error('❌ [PLAY] Error en reproducción:', error);
+        throw error;
     }
 }

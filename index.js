@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, Collection } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const fs = require('fs');
 const path = require('path');
+const musicState = require('./utils/musicState');
 require('dotenv').config();
 
 // Cargar librería de encriptación para audio
@@ -39,6 +40,11 @@ client.voiceConnections = new Map();
 // Variables globales para auto-desconexión por inactividad
 global.inactivityTimeout = null;
 global.INACTIVITY_LIMIT = 45000; // 45 segundos en milisegundos
+
+// Variables globales para modo radio/autoplay
+global.radioMode = false; // Si está activado el modo radio
+global.lastPlayedSongs = []; // Historial de canciones para recomendaciones
+global.MAX_HISTORY = 10; // Máximo de canciones en el historial
 
 // Funciones globales para manejar auto-desconexión por inactividad
 global.startInactivityTimer = function() {
@@ -208,8 +214,8 @@ async function handleMusicButton(interaction, customId) {
 
         switch (customId) {
             case 'music_skip':
-                // Verificar si hay música reproduciéndose
-                if (!global.audioPlayer || !global.currentConnection) {
+                // Verificar si hay música para saltar
+                if (!musicState.hasActiveMusic()) {
                     return await interaction.reply({ 
                         content: '❌ No hay música reproduciéndose actualmente.', 
                         ephemeral: true 
@@ -217,7 +223,7 @@ async function handleMusicButton(interaction, customId) {
                 }
 
                 // Verificar si hay más canciones en la cola
-                if (!global.musicQueue || global.musicQueue.length === 0) {
+                if (musicState.getQueueLength() === 0) {
                     return await interaction.reply({ 
                         content: '❌ No hay más canciones en la cola para saltar.', 
                         ephemeral: true 
@@ -229,9 +235,9 @@ async function handleMusicButton(interaction, customId) {
                 break;
 
             case 'music_pause':
-                if (!global.audioPlayer) {
+                if (!musicState.isPlaying()) {
                     return await interaction.reply({ 
-                        content: '❌ No hay música reproduciéndose actualmente.', 
+                        content: '❌ No hay música reproduciéndose actualmente o ya está pausada.', 
                         ephemeral: true 
                     });
                 }
@@ -245,9 +251,9 @@ async function handleMusicButton(interaction, customId) {
                 break;
 
             case 'music_resume':
-                if (!global.audioPlayer) {
+                if (!musicState.isPaused()) {
                     return await interaction.reply({ 
-                        content: '❌ No hay música reproduciéndose actualmente.', 
+                        content: '❌ No hay música pausada para reanudar.', 
                         ephemeral: true 
                     });
                 }
@@ -261,8 +267,8 @@ async function handleMusicButton(interaction, customId) {
                 break;
 
             case 'music_queue':
-                // Mostrar la cola de música
-                if (!global.musicQueue || global.musicQueue.length === 0) {
+                // Mostrar la cola de música usando funciones centralizadas
+                if (!musicState.hasActiveMusic() || musicState.getQueueLength() === 0) {
                     return await interaction.reply({ 
                         content: '❌ No hay canciones en la cola.', 
                         ephemeral: true 
@@ -271,15 +277,19 @@ async function handleMusicButton(interaction, customId) {
 
                 const { EmbedBuilder } = require('discord.js');
                 const itemsPerPage = 10;
-                const totalPages = Math.ceil(global.musicQueue.length / itemsPerPage);
+                const totalPages = Math.ceil(musicState.getQueueLength() / itemsPerPage);
                 const queueSlice = global.musicQueue.slice(0, itemsPerPage); // Mostrar primera página
+
+                const currentSong = musicState.getCurrentSong();
+                const currentInfo = currentSong ? `**🎵 Reproduciendo:** ${currentSong.title}\n\n` : '';
 
                 const embed = new EmbedBuilder()
                     .setColor('#1DB954')
                     .setTitle('🎵 Cola de Reproducción')
+                    .setDescription(currentInfo)
                     .addFields(
-                        { name: '📊 Estado', value: global.audioPlayer ? 'Reproduciendo' : 'Detenido', inline: true },
-                        { name: '🎵 Canciones en cola', value: global.musicQueue.length.toString(), inline: true },
+                        { name: '📊 Estado', value: musicState.getPlayerStatus(), inline: true },
+                        { name: '🎵 Canciones en cola', value: musicState.getQueueLength().toString(), inline: true },
                         { name: '🔀 Shuffle', value: global.guildSettings?.[interaction.guild.id]?.shuffle ? 'Activado' : 'Desactivado', inline: true }
                     )
                     .setTimestamp();
@@ -309,37 +319,24 @@ async function handleMusicButton(interaction, customId) {
                 break;
 
             case 'music_stop':
-                if (!global.audioPlayer && !global.currentConnection) {
+                // Usar la función centralizada para verificar y limpiar estado
+                if (!musicState.hasActiveMusic()) {
                     return await interaction.reply({ 
                         content: '❌ No hay música reproduciéndose actualmente.', 
                         ephemeral: true 
                     });
                 }
 
-                // Cancelar timer de inactividad
-                global.cancelInactivityTimer();
-
-                // Limpiar la cola
-                global.musicQueue = [];
-                
-                // Detener el reproductor global si existe
-                if (global.audioPlayer) {
-                    global.audioPlayer.stop();
-                    global.audioPlayer = null;
+                try {
+                    musicState.clearMusicState();
+                    await interaction.reply('⏹️ **Música detenida** por ' + interaction.user.displayName);
+                } catch (error) {
+                    console.error('❌ Error en botón detener:', error);
+                    await interaction.reply({ 
+                        content: '❌ Error al detener la música, pero se intentó limpiar el estado.', 
+                        ephemeral: true 
+                    });
                 }
-                
-                // Desconectar del canal de voz
-                if (global.currentConnection) {
-                    global.currentConnection.destroy();
-                    global.currentConnection = null;
-                }
-                
-                // Limpiar referencias globales
-                global.lastVoiceChannel = null;
-                global.lastTextChannel = null;
-                global.currentSong = null;
-
-                await interaction.reply('⏹️ **Música detenida** por ' + interaction.user.displayName);
                 break;
 
             default:

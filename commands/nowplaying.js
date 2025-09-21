@@ -1,4 +1,5 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const musicState = require('../utils/musicState');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -6,12 +7,17 @@ module.exports = {
         .setDescription('Muestra la canción que se está reproduciendo actualmente'),
 
     async execute(interaction) {
-        // Verificar si hay música reproduciéndose usando las variables globales
-        if (!global.audioPlayer || !global.currentSong) {
+        // Agregar debug temporal para investigar el problema
+        console.log(`🔍 [NOWPLAYING] Debug - musicState.isPlaying(): ${musicState.isPlaying()}`);
+        console.log(`🔍 [NOWPLAYING] Debug - musicState.getCurrentSong():`, musicState.getCurrentSong());
+        console.log(`🔍 [NOWPLAYING] Debug - musicState.getStateDebugInfo():`, musicState.getStateDebugInfo());
+        
+        // Verificar si hay música reproduciéndose usando las funciones centralizadas
+        if (!musicState.isPlaying()) {
             return await interaction.reply('❌ No hay música reproduciéndose actualmente.');
         }
 
-        const song = global.currentSong;
+        const song = musicState.getCurrentSong();
         
         // Crear información más detallada
         const title = song.title || 'Título desconocido';

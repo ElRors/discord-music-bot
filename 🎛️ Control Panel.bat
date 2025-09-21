@@ -11,7 +11,7 @@ echo Selecciona una opción:
 echo.
 echo 1. 🚀 Iniciar Bot
 echo 2. 🔄 Resetear Bot 
-echo 3. ⏹️  Apagar Bot
+echo 3. ⏹️ Apagar Bot
 echo 4. 📊 Ver Estado
 echo 5. 📝 Ver Logs
 echo 6. 🔧 Reinstalar Dependencias

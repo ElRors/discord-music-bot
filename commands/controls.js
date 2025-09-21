@@ -1,4 +1,5 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const musicState = require('../utils/musicState');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -6,12 +7,10 @@ module.exports = {
         .setDescription('Muestra los controles de música con botones interactivos'),
 
     async execute(interaction) {
-        // Verificar si hay música reproduciéndose
-        if (!global.audioPlayer || !global.currentConnection) {
+        if (!musicState.hasActiveMusic()) {
             return await interaction.reply('❌ No hay música reproduciéndose actualmente.');
         }
 
-        // Crear botones de control
         const row = new ActionRowBuilder()
             .addComponents(
                 new ButtonBuilder()
@@ -36,15 +35,18 @@ module.exports = {
                     .setStyle(ButtonStyle.Danger)
             );
 
-        // Crear embed con información actual
+        const playerStatus = musicState.getPlayerStatus();
+        const currentSong = musicState.getCurrentSong();
+        const currentSongInfo = currentSong ? currentSong.title : 'Ninguna';
+        
         const embed = new EmbedBuilder()
             .setColor('#1DB954')
             .setTitle('🎵 Controles de Música')
             .setDescription('Usa los botones para controlar la reproducción')
             .addFields(
-                { name: '📊 Estado', value: global.audioPlayer ? 'Reproduciendo' : 'Detenido', inline: true },
-                { name: '🎵 Canciones en cola', value: global.musicQueue ? global.musicQueue.length.toString() : '0', inline: true },
-                { name: '🔀 Shuffle', value: global.guildSettings?.[interaction.guild.id]?.shuffle ? 'Activado' : 'Desactivado', inline: true }
+                { name: '📊 Estado del Reproductor', value: playerStatus, inline: true },
+                { name: '🎵 Canción Actual', value: currentSongInfo, inline: true },
+                { name: '📋 Canciones en cola', value: musicState.getQueueLength().toString(), inline: true }
             )
             .setTimestamp()
             .setFooter({ text: 'Los botones funcionan para todos los usuarios en el canal de voz' });

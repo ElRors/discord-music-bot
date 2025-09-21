@@ -1,4 +1,5 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
+const musicState = require('../utils/musicState');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -6,8 +7,8 @@ module.exports = {
         .setDescription('Salta a la siguiente canción en la cola'),
 
     async execute(interaction) {
-        // Verificar si hay música reproduciéndose
-        if (!global.audioPlayer || !global.currentConnection) {
+        // Verificar si hay música activa para saltar
+        if (!musicState.hasActiveMusic()) {
             return await interaction.reply('❌ No hay música reproduciéndose actualmente.');
         }
 
