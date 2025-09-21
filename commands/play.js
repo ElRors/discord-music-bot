@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const ytdl = require('@distube/ytdl-core');
 const YouTubeSearchAPI = require('youtube-search-api');
@@ -13,20 +13,9 @@ const spotify = new SpotifyWebApi({
 
 // Función auxiliar para crear stream de audio con respaldo
 async function createAudioStream(url) {
-    console.log('🎵 Intentando con ytdl-core...');
-    
-    // Primero verificar si la URL es válida para ytdl
-    if (!ytdl.validateURL(url)) {
-        console.log('❌ URL no válida para ytdl-core, usando play-dl...');
-        const stream = await play.stream(url, { 
-            quality: 2 // alta calidad
-        });
-        return createAudioResource(stream.stream, {
-            inputType: stream.type
-        });
-    }
-
     try {
+        // Intentar primero con ytdl-core
+        console.log('🎵 Intentando con ytdl-core...');
         const stream = ytdl(url, {
             filter: 'audioonly',
             quality: 'highestaudio',
@@ -37,7 +26,6 @@ async function createAudioStream(url) {
             }
         });
         
-        console.log('✅ Stream de ytdl-core creado');
         return createAudioResource(stream);
     } catch (error) {
         console.log('❌ ytdl-core falló, intentando con play-dl...');
@@ -45,7 +33,6 @@ async function createAudioStream(url) {
             const stream = await play.stream(url, { 
                 quality: 2 // alta calidad
             });
-            console.log('✅ Stream de play-dl creado');
             return createAudioResource(stream.stream, {
                 inputType: stream.type
             });
@@ -157,6 +144,33 @@ async function handleSpotifyPlaylist(playlistId) {
     }
 }
 
+// Función para crear botones de control de música
+function createMusicControls() {
+    return new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('music_skip')
+                .setLabel('⏭️ Skip')
+                .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId('music_pause')
+                .setLabel('⏸️ Pausar')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('music_resume')
+                .setLabel('▶️ Reanudar')
+                .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('music_queue')
+                .setLabel('📋 Cola')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('music_stop')
+                .setLabel('⏹️ Detener')
+                .setStyle(ButtonStyle.Danger)
+        );
+}
+
 // Función para reproducir la siguiente canción de la cola
 async function playNextSong(voiceChannel, textChannel) {
     if (!global.musicQueue || global.musicQueue.length === 0) {
@@ -166,6 +180,7 @@ async function playNextSong(voiceChannel, textChannel) {
     }
 
     const song = global.musicQueue.shift();
+    global.currentSong = song; // Actualizar la canción actual inmediatamente
     
     try {
         console.log(`🎵 Reproduciendo: ${song.title}`);
@@ -176,6 +191,7 @@ async function playNextSong(voiceChannel, textChannel) {
             channelId: voiceChannel.id,
             guildId: voiceChannel.guild.id,
             adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+            selfDeaf: true, // Agregamos esto para mejor compatibilidad
         });
 
         global.currentConnection = connection;
@@ -199,6 +215,14 @@ async function playNextSong(voiceChannel, textChannel) {
 
             global.audioPlayer.on(AudioPlayerStatus.Playing, () => {
                 console.log('▶️ Estado: Reproduciendo');
+                
+                // Mostrar controles solo si no se han mostrado recientemente
+                if (!global.lastControlsShown || Date.now() - global.lastControlsShown > 10000) {
+                    if (global.lastTextChannel && global.currentSong) {
+                        showMusicControls(global.lastTextChannel, global.currentSong);
+                        global.lastControlsShown = Date.now();
+                    }
+                }
             });
 
             global.audioPlayer.on('error', error => {
@@ -214,6 +238,7 @@ async function playNextSong(voiceChannel, textChannel) {
         // Guardar referencias para los callbacks
         global.lastVoiceChannel = voiceChannel;
         global.lastTextChannel = textChannel;
+        global.currentSong = song; // Guardar la canción actual
 
         console.log('🎵 Creando stream de audio...');
         // Usar la nueva función de stream con respaldo
@@ -224,11 +249,6 @@ async function playNextSong(voiceChannel, textChannel) {
         global.audioPlayer.play(resource);
         connection.subscribe(global.audioPlayer);
         console.log('✅ Reproductor conectado');
-
-        if (textChannel) {
-            const artist = song.artist ? ` por **${song.artist}**` : '';
-            textChannel.send(`🎵 **Reproduciendo:** ${song.title}${artist}`);
-        }
 
     } catch (error) {
         console.error('❌ Error al reproducir:', error);
@@ -291,7 +311,10 @@ module.exports = {
                     // Agregar todas las canciones a la cola
                     global.musicQueue.push(...playlistData.tracks);
                     
-                    await interaction.editReply(`✅ Agregadas ${playlistData.tracks.length} canciones de la playlist **${playlistData.playlistName}** a la cola.`);
+                    await interaction.editReply({
+                        content: `✅ Agregadas ${playlistData.tracks.length} canciones de la playlist **${playlistData.playlistName}** a la cola.`,
+                        components: [createMusicControls()]
+                    });
                     
                     // Si no hay nada reproduciéndose, empezar
                     if (!global.currentConnection) {
@@ -315,7 +338,10 @@ module.exports = {
                     
                     global.musicQueue.push(trackData);
                     
-                    await interaction.editReply(`✅ **${trackData.title}** por **${trackData.artist}** agregada a la cola.`);
+                    await interaction.editReply({
+                        content: `✅ **${trackData.title}** por **${trackData.artist}** agregada a la cola.`,
+                        components: [createMusicControls()]
+                    });
                     
                     // Si no hay nada reproduciéndose, empezar
                     if (!global.currentConnection) {
@@ -356,6 +382,7 @@ module.exports = {
                 channelId: voiceChannel.id,
                 guildId: interaction.guild.id,
                 adapterCreator: interaction.guild.voiceAdapterCreator,
+                selfDeaf: true, // Agregamos esto para mejor compatibilidad
             });
 
             console.log(`🎵 Creando reproductor...`);
@@ -376,7 +403,10 @@ module.exports = {
                 console.error('❌ Error reproductor:', error);
             });
 
-            await interaction.editReply(`🎵 **Reproduciendo:** ${videoTitle}`);
+            await interaction.editReply({
+                content: `🎵 **Reproduciendo:** ${videoTitle}`,
+                components: [createMusicControls()]
+            });
 
         } catch (error) {
             console.error('❌ Error general:', error);
@@ -384,3 +414,31 @@ module.exports = {
         }
     },
 };
+
+// Función helper para mostrar controles automáticamente
+async function showMusicControls(textChannel, songInfo = null) {
+    try {
+        if (!textChannel) {
+            console.log('❌ No hay canal de texto para mostrar controles');
+            return;
+        }
+
+        let message = '🎵 **Controles de Música**';
+        
+        if (songInfo) {
+            const title = songInfo.title || 'Título desconocido';
+            const artist = songInfo.artist ? ` por **${songInfo.artist}**` : '';
+            const source = songInfo.isSpotify ? '[SPOTIFY→YT]' : '[YOUTUBE]';
+            message = `🎵 **Reproduciendo:** ${title}${artist} ${source}`;
+        }
+
+        await textChannel.send({
+            content: message,
+            components: [createMusicControls()]
+        });
+        
+        console.log('✅ Controles automáticos enviados');
+    } catch (error) {
+        console.error('❌ Error enviando controles automáticos:', error);
+    }
+}
