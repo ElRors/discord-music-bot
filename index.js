@@ -36,6 +36,68 @@ client.commands = new Collection();
 // Map para almacenar conexiones de voz
 client.voiceConnections = new Map();
 
+// Variables globales para auto-desconexión por inactividad
+global.inactivityTimeout = null;
+global.INACTIVITY_LIMIT = 45000; // 45 segundos en milisegundos
+
+// Funciones globales para manejar auto-desconexión por inactividad
+global.startInactivityTimer = function() {
+    // Cancelar timer existente si hay uno
+    if (global.inactivityTimeout) {
+        clearTimeout(global.inactivityTimeout);
+    }
+    
+    console.log('⏰ Iniciando timer de inactividad (45 segundos)');
+    global.inactivityTimeout = setTimeout(() => {
+        global.disconnectFromVoice();
+    }, global.INACTIVITY_LIMIT);
+};
+
+global.cancelInactivityTimer = function() {
+    if (global.inactivityTimeout) {
+        clearTimeout(global.inactivityTimeout);
+        global.inactivityTimeout = null;
+        console.log('✅ Timer de inactividad cancelado');
+    }
+};
+
+global.disconnectFromVoice = function() {
+    try {
+        console.log('🚶 Desconectando por inactividad...');
+        
+        // Limpiar la cola
+        global.musicQueue = [];
+        
+        // Detener el reproductor global si existe
+        if (global.audioPlayer) {
+            global.audioPlayer.stop();
+            global.audioPlayer = null;
+        }
+        
+        // Desconectar del canal de voz
+        if (global.currentConnection) {
+            global.currentConnection.destroy();
+            global.currentConnection = null;
+        }
+        
+        // Limpiar referencias globales
+        global.lastVoiceChannel = null;
+        global.currentSong = null;
+        global.inactivityTimeout = null;
+        
+        // Enviar mensaje de desconexión si hay canal de texto
+        if (global.lastTextChannel) {
+            global.lastTextChannel.send('🚶 **Bot desconectado por inactividad** (45 segundos sin música)')
+                .catch(err => console.log('No se pudo enviar mensaje de desconexión:', err));
+            global.lastTextChannel = null;
+        }
+        
+        console.log('✅ Desconectado exitosamente por inactividad');
+    } catch (error) {
+        console.error('❌ Error al desconectar por inactividad:', error);
+    }
+};
+
 // Cargar comandos
 const commandsPath = path.join(__dirname, 'commands');
 const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
@@ -175,6 +237,10 @@ async function handleMusicButton(interaction, customId) {
                 }
 
                 global.audioPlayer.pause();
+                
+                // Iniciar timer de inactividad cuando se pausa
+                global.startInactivityTimer();
+                
                 await interaction.reply('⏸️ **Música pausada** por ' + interaction.user.displayName);
                 break;
 
@@ -187,6 +253,10 @@ async function handleMusicButton(interaction, customId) {
                 }
 
                 global.audioPlayer.unpause();
+                
+                // Cancelar timer de inactividad cuando se reanuda
+                global.cancelInactivityTimer();
+                
                 await interaction.reply('▶️ **Música reanudada** por ' + interaction.user.displayName);
                 break;
 
@@ -246,6 +316,9 @@ async function handleMusicButton(interaction, customId) {
                     });
                 }
 
+                // Cancelar timer de inactividad
+                global.cancelInactivityTimer();
+
                 // Limpiar la cola
                 global.musicQueue = [];
                 
@@ -264,6 +337,7 @@ async function handleMusicButton(interaction, customId) {
                 // Limpiar referencias globales
                 global.lastVoiceChannel = null;
                 global.lastTextChannel = null;
+                global.currentSong = null;
 
                 await interaction.reply('⏹️ **Música detenida** por ' + interaction.user.displayName);
                 break;

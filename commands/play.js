@@ -206,15 +206,31 @@ async function playNextSong(voiceChannel, textChannel) {
             global.audioPlayer.on(AudioPlayerStatus.Idle, () => {
                 console.log('🎵 Canción terminada, reproduciendo siguiente...');
                 console.log(`📝 Canciones restantes en cola: ${global.musicQueue ? global.musicQueue.length : 0}`);
-                setTimeout(() => {
-                    if (global.lastVoiceChannel && global.lastTextChannel) {
-                        playNextSong(global.lastVoiceChannel, global.lastTextChannel);
+                
+                // Verificar si hay más canciones
+                if (!global.musicQueue || global.musicQueue.length === 0) {
+                    console.log('⏰ No hay más canciones, iniciando timer de inactividad');
+                    // Iniciar timer de inactividad si no hay más canciones
+                    if (typeof global.startInactivityTimer === 'function') {
+                        global.startInactivityTimer();
                     }
-                }, 1000);
+                } else {
+                    // Hay más canciones, reproducir la siguiente
+                    setTimeout(() => {
+                        if (global.lastVoiceChannel && global.lastTextChannel) {
+                            playNextSong(global.lastVoiceChannel, global.lastTextChannel);
+                        }
+                    }, 1000);
+                }
             });
 
             global.audioPlayer.on(AudioPlayerStatus.Playing, () => {
                 console.log('▶️ Estado: Reproduciendo');
+                
+                // Cancelar timer de inactividad cuando se está reproduciendo
+                if (typeof global.cancelInactivityTimer === 'function') {
+                    global.cancelInactivityTimer();
+                }
                 
                 // Mostrar controles solo si no se han mostrado recientemente
                 if (!global.lastControlsShown || Date.now() - global.lastControlsShown > 10000) {
@@ -312,8 +328,7 @@ module.exports = {
                     global.musicQueue.push(...playlistData.tracks);
                     
                     await interaction.editReply({
-                        content: `✅ Agregadas ${playlistData.tracks.length} canciones de la playlist **${playlistData.playlistName}** a la cola.`,
-                        components: [createMusicControls()]
+                        content: `✅ Agregadas ${playlistData.tracks.length} canciones de la playlist **${playlistData.playlistName}** a la cola.`
                     });
                     
                     // Si no hay nada reproduciéndose, empezar
@@ -339,8 +354,7 @@ module.exports = {
                     global.musicQueue.push(trackData);
                     
                     await interaction.editReply({
-                        content: `✅ **${trackData.title}** por **${trackData.artist}** agregada a la cola.`,
-                        components: [createMusicControls()]
+                        content: `✅ **${trackData.title}** por **${trackData.artist}** agregada a la cola.`
                     });
                     
                     // Si no hay nada reproduciéndose, empezar

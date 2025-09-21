@@ -6,16 +6,24 @@ module.exports = {
         .setDescription('Muestra la canción que se está reproduciendo actualmente'),
 
     async execute(interaction) {
-        const voiceConnection = interaction.client.voiceConnections.get(interaction.guild.id);
-
-        if (!voiceConnection || !voiceConnection.currentSong) {
+        // Verificar si hay música reproduciéndose usando las variables globales
+        if (!global.audioPlayer || !global.currentSong) {
             return await interaction.reply('❌ No hay música reproduciéndose actualmente.');
         }
 
-        const song = voiceConnection.currentSong;
+        const song = global.currentSong;
+        
+        // Crear información más detallada
+        const title = song.title || 'Título desconocido';
+        const artist = song.artist ? ` por **${song.artist}**` : '';
+        const source = song.isSpotify ? '[SPOTIFY→YT]' : '[YOUTUBE]';
+        const queueCount = global.musicQueue ? global.musicQueue.length : 0;
 
         await interaction.reply({
-            content: `🎵 **Reproduciendo ahora:**\n**Título:** ${song.title}\n**Solicitado por:** ${song.requester}\n**URL:** ${song.url}`
+            content: `🎵 **Reproduciendo ahora:**\n` +
+                    `**${title}**${artist} ${source}\n` +
+                    `🔗 **URL:** ${song.url}\n` +
+                    `📊 **Canciones en cola:** ${queueCount}`
         });
     },
 };
