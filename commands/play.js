@@ -65,6 +65,12 @@ function extractSpotifyId(url) {
     return match ? match[1] : null;
 }
 
+// Función auxiliar para detectar playlists especiales de Spotify
+function isSpotifySpecialPlaylist(playlistId) {
+    // Playlists de Spotify que empiezan con 37i9dQZF1 suelen ser especiales
+    return playlistId.startsWith('37i9dQZF1');
+}
+
 // Función para manejar tracks de Spotify
 async function handleSpotifyTrack(trackId) {
     try {
@@ -99,9 +105,13 @@ async function handleSpotifyTrack(trackId) {
 // Función para manejar playlists de Spotify
 async function handleSpotifyPlaylist(playlistId) {
     try {
+        console.log(`🔍 Intentando procesar playlist ID: ${playlistId}`);
         await authenticateSpotify();
+        console.log('✅ Autenticación de Spotify exitosa');
+        
         const playlist = await spotify.getPlaylist(playlistId);
         const playlistData = playlist.body;
+        console.log(`📋 Playlist obtenida: ${playlistData.name}`);
         
         const tracks = [];
         const items = playlistData.tracks.items;
@@ -113,6 +123,7 @@ async function handleSpotifyPlaylist(playlistId) {
             if (track && track.type === 'track') {
                 try {
                     const searchQuery = `${track.artists[0].name} ${track.name}`;
+                    console.log(`🔍 Buscando: ${searchQuery}`);
                     const searchResults = await YouTubeSearchAPI.GetListByKeyword(searchQuery, false, 1);
                     
                     if (searchResults.items && searchResults.items.length > 0) {
@@ -126,21 +137,33 @@ async function handleSpotifyPlaylist(playlistId) {
                             isSpotify: true,
                             thumbnailUrl: track.album.images[0]?.url
                         });
+                        console.log(`✅ Track ${i + 1} procesado: ${track.name}`);
+                    } else {
+                        console.log(`❌ No se encontró en YouTube: ${searchQuery}`);
                     }
                 } catch (error) {
-                    console.error(`Error al procesar track ${i + 1}:`, error);
+                    console.error(`❌ Error al procesar track ${i + 1} (${track.name}):`, error.message);
                 }
             }
         }
         
+        console.log(`✅ Procesamiento completado: ${tracks.length} tracks exitosos de ${items.length} totales`);
         return {
             tracks,
             playlistName: playlistData.name,
             playlistUrl: playlistData.external_urls.spotify
         };
     } catch (error) {
-        console.error('Error al procesar playlist de Spotify:', error);
-        throw error;
+        console.error('❌ Error detallado al procesar playlist de Spotify:', error);
+        if (error.statusCode === 404) {
+            throw new Error('Playlist no encontrada o es privada');
+        } else if (error.statusCode === 401) {
+            throw new Error('Error de autenticación con Spotify');
+        } else if (error.statusCode === 429) {
+            throw new Error('Límite de tasa excedido, intenta de nuevo en un momento');
+        } else {
+            throw new Error(`Error de Spotify: ${error.message || 'Error desconocido'}`);
+        }
     }
 }
 
@@ -292,6 +315,36 @@ async function playNextSong(voiceChannel, textChannel) {
 
             global.audioPlayer.on('error', error => {
                 console.error('❌ Error reproductor:', error);
+                console.error('Tipo de error:', error.name);
+                console.error('Mensaje:', error.message);
+                
+                // Intentar recuperarse de errores de stream interrumpido
+                if (error.message && error.message.includes('aborted') && global.currentSong) {
+                    // Incrementar contador de reintentos para esta canción
+                    if (!global.currentSong.retryCount) {
+                        global.currentSong.retryCount = 0;
+                    }
+                    global.currentSong.retryCount++;
+                    
+                    console.log(`🔄 Stream interrumpido, intento ${global.currentSong.retryCount}/3 para: ${global.currentSong.title}`);
+                    
+                    // Máximo 3 intentos antes de saltar a la siguiente canción
+                    if (global.currentSong.retryCount <= 3) {
+                        console.log('⏳ Reintentando reproducir la canción...');
+                        setTimeout(() => {
+                            if (global.lastVoiceChannel && global.lastTextChannel && global.currentSong) {
+                                // Reintentar la misma canción
+                                playSong(global.lastVoiceChannel, global.lastTextChannel, global.currentSong);
+                            }
+                        }, 2000);
+                        return;
+                    } else {
+                        console.log('❌ Máximo de reintentos alcanzado, saltando a la siguiente canción');
+                        global.lastTextChannel.send('⚠️ No se pudo reproducir la canción después de varios intentos, saltando a la siguiente...');
+                    }
+                }
+                
+                // Para otros errores o después de agotar reintentos, saltar a la siguiente canción
                 setTimeout(() => {
                     if (global.lastVoiceChannel && global.lastTextChannel) {
                         playNextSong(global.lastVoiceChannel, global.lastTextChannel);
@@ -355,37 +408,48 @@ module.exports = {
                     return await interaction.editReply('❌ URL de Spotify inválida.');
                 }
                 
+                // Verificar si es una playlist especial de Spotify
+                if (query.includes('/playlist/') && isSpotifySpecialPlaylist(spotifyId)) {
+                    return await interaction.editReply('❌ Esta playlist de Spotify (Daily Mix, Discover Weekly, etc.) no está disponible a través de la API pública. Prueba con una playlist de usuario normal o un álbum.');
+                }
+                
                 // Verificar si es playlist o track
                 if (query.includes('/playlist/')) {
                     console.log('📝 Procesando playlist de Spotify...');
                     await interaction.editReply('🎧 Procesando playlist de Spotify...');
                     
-                    const playlistData = await handleSpotifyPlaylist(spotifyId);
-                    
-                    if (playlistData.tracks.length === 0) {
-                        return await interaction.editReply('❌ No se pudo procesar la playlist.');
+                    try {
+                        const playlistData = await handleSpotifyPlaylist(spotifyId);
+                        
+                        if (playlistData.tracks.length === 0) {
+                            return await interaction.editReply('❌ No se encontraron canciones válidas en la playlist. Puede que sea privada o las canciones no estén disponibles.');
+                        }
+                        
+                        // Inicializar o obtener la cola
+                        if (!global.musicQueue) {
+                            global.musicQueue = [];
+                            global.guildSettings = global.guildSettings || {};
+                            global.guildSettings[interaction.guild.id] = { shuffle: false };
+                        }
+                        
+                        // Agregar todas las canciones a la cola
+                        global.musicQueue.push(...playlistData.tracks);
+                        
+                        await interaction.editReply({
+                            content: `✅ Agregadas ${playlistData.tracks.length} canciones de la playlist **${playlistData.playlistName}** a la cola.`
+                        });
+                        
+                        // Si no hay nada reproduciéndose, empezar
+                        if (!global.currentConnection) {
+                            playNextSong(voiceChannel, interaction.channel);
+                        }
+                        
+                        return;
+                        
+                    } catch (error) {
+                        console.error('❌ Error específico de playlist:', error);
+                        return await interaction.editReply(`❌ Error al procesar playlist de Spotify: ${error.message}`);
                     }
-                    
-                    // Inicializar o obtener la cola
-                    if (!global.musicQueue) {
-                        global.musicQueue = [];
-                        global.guildSettings = global.guildSettings || {};
-                        global.guildSettings[interaction.guild.id] = { shuffle: false };
-                    }
-                    
-                    // Agregar todas las canciones a la cola
-                    global.musicQueue.push(...playlistData.tracks);
-                    
-                    await interaction.editReply({
-                        content: `✅ Agregadas ${playlistData.tracks.length} canciones de la playlist **${playlistData.playlistName}** a la cola.`
-                    });
-                    
-                    // Si no hay nada reproduciéndose, empezar
-                    if (!global.currentConnection) {
-                        playNextSong(voiceChannel, interaction.channel);
-                    }
-                    
-                    return;
                     
                 } else if (query.includes('/album/')) {
                     console.log('💿 Procesando álbum de Spotify...');
