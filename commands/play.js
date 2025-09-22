@@ -223,35 +223,102 @@ async function handleYouTubeSearch(searchQuery) {
     }
 }
 
-// Función auxiliar para crear stream de audio con respaldo
-async function createAudioStream(url) {
-    try {
-        // Intentar primero con ytdl-core
-        console.log('🎵 [PLAY] Intentando con ytdl-core...');
-        const stream = ytdl(url, {
-            filter: 'audioonly',
-            quality: 'highestaudio',
-            requestOptions: {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+// Función auxiliar para crear stream con reintentos automáticos
+async function createAudioStreamWithRetry(url, title = 'Canción', maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            console.log(`🔄 [PLAY] Intento ${attempt}/${maxRetries} para: ${title}`);
+            const resource = await createAudioStream(url);
+            console.log(`✅ [PLAY] Stream creado exitosamente en intento ${attempt}`);
+            return resource;
+        } catch (error) {
+            console.log(`❌ [PLAY] Intento ${attempt} falló:`, error.message);
+            
+            if (attempt === maxRetries) {
+                // Si todos los intentos fallaron, buscar video alternativo
+                console.log('🔍 [PLAY] Buscando video alternativo...');
+                try {
+                    const searchQuery = title.replace(/[^\w\s]/gi, '').trim();
+                    const YouTubeSearchAPI = require('youtube-search-api');
+                    const searchResults = await YouTubeSearchAPI.GetListByKeyword(searchQuery, false, 3);
+                    
+                    if (searchResults.items && searchResults.items.length > 0) {
+                        // Intentar con los resultados alternativos
+                        for (let i = 0; i < Math.min(2, searchResults.items.length); i++) {
+                            const alternativeUrl = `https://www.youtube.com/watch?v=${searchResults.items[i].id}`;
+                            if (alternativeUrl !== url) {
+                                console.log(`🔄 [PLAY] Probando video alternativo ${i + 1}: ${searchResults.items[i].title}`);
+                                try {
+                                    return await createAudioStream(alternativeUrl);
+                                } catch (altError) {
+                                    console.log(`❌ [PLAY] Video alternativo ${i + 1} falló:`, altError.message);
+                                }
+                            }
+                        }
+                    }
+                } catch (searchError) {
+                    console.log('❌ [PLAY] Error buscando alternativas:', searchError.message);
                 }
+                throw new Error(`No se pudo crear stream después de ${maxRetries} intentos y búsqueda de alternativas`);
             }
+            
+            // Esperar antes del siguiente intento (delay progresivo)
+            const delay = attempt * 1500;
+            console.log(`⏳ [PLAY] Esperando ${delay}ms antes del siguiente intento...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+}
+
+// Función auxiliar para crear stream de audio con play-dl como método principal
+async function createAudioStream(url) {
+    console.log('🎵 [PLAY] Creando stream de audio...');
+    
+    // Método 1: play-dl (más estable)
+    try {
+        console.log('🎵 [PLAY] Intentando con play-dl (método principal)...');
+        const play = require('play-dl');
+        
+        // Verificar si es una URL válida
+        const info = await play.video_info(url).catch(() => null);
+        if (!info) throw new Error('URL no válida para play-dl');
+        
+        const stream = await play.stream(url, { 
+            quality: 2, // alta calidad
+            discordPlayerCompatibility: true // Optimizado para Discord
         });
         
-        return createAudioResource(stream);
-    } catch (error) {
-        console.log('❌ [PLAY] ytdl-core falló, intentando con play-dl...');
+        console.log('✅ [PLAY] Stream creado exitosamente con play-dl');
+        return createAudioResource(stream.stream, {
+            inputType: stream.type,
+            inlineVolume: true
+        });
+    } catch (playDlError) {
+        console.log('⚠️ [PLAY] play-dl falló, intentando con ytdl-core...');
+        
+        // Método 2: ytdl-core (fallback)
         try {
-            const play = require('play-dl');
-            const stream = await play.stream(url, { 
-                quality: 2 // alta calidad
+            console.log('🎵 [PLAY] Intentando con ytdl-core...');
+            const stream = ytdl(url, {
+                filter: 'audioonly',
+                quality: 'highestaudio',
+                requestOptions: {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                },
+                highWaterMark: 1 << 25 // Buffer más grande para estabilidad
             });
-            return createAudioResource(stream.stream, {
-                inputType: stream.type
+            
+            console.log('✅ [PLAY] Stream creado con ytdl-core (fallback)');
+            return createAudioResource(stream, {
+                inlineVolume: true
             });
-        } catch (playDlError) {
-            console.error('❌ [PLAY] Ambos métodos fallaron:', playDlError);
-            throw playDlError;
+        } catch (ytdlError) {
+            console.error('❌ [PLAY] Ambos métodos fallaron:');
+            console.error('  - play-dl:', playDlError.message);
+            console.error('  - ytdl-core:', ytdlError.message);
+            throw new Error('No se pudo crear el stream de audio con ningún método');
         }
     }
 }
@@ -436,7 +503,7 @@ async function startPlayback(voiceChannel, textChannel, song) {
         global.pendingSong = song;
 
         console.log(`🎵 [PLAY] Creando stream de audio...`);
-        const resource = await createAudioStream(song.url);
+        const resource = await createAudioStreamWithRetry(song.url, song.title);
 
         // Usar reproductor global o crear uno nuevo
         if (!global.audioPlayer) {
@@ -500,17 +567,28 @@ async function startPlayback(voiceChannel, textChannel, song) {
                     global.consecutiveErrors = 0;
                 }
                 
-                global.consecutiveErrors++;
+                // Detectar tipo de error específico
+                const errorMessage = error.message || '';
+                const isAbortedError = errorMessage.includes('aborted') || error.code === 'ECONNRESET';
+                const is403Error = errorMessage.includes('Status code: 403');
+                const isNetworkError = errorMessage.includes('network') || errorMessage.includes('timeout');
                 
-                // Detectar errores 403 específicamente
-                const is403Error = error.message && error.message.includes('Status code: 403');
-                if (is403Error) {
+                if (isAbortedError) {
+                    console.log('🔄 [PLAY] Error de conexión detectado (aborted) - reintentando automáticamente...');
+                    // Para errores aborted, reintentar inmediatamente sin contar como error grave
+                } else if (is403Error) {
                     console.log('⚠️ [PLAY] Error 403 detectado - Video no disponible para descarga');
+                    global.consecutiveErrors++;
+                } else if (isNetworkError) {
+                    console.log('🌐 [PLAY] Error de red detectado - reintentando con delay...');
+                } else {
+                    console.log('❌ [PLAY] Error desconocido - contabilizando como error grave');
+                    global.consecutiveErrors++;
                 }
                 
-                // Límite de 5 errores consecutivos para evitar loop infinito
-                if (global.consecutiveErrors >= 5) {
-                    console.log('⚠️ [PLAY] Demasiados errores consecutivos, deteniendo reproducción');
+                // Límite de 7 errores consecutivos (solo errores graves)
+                if (global.consecutiveErrors >= 7) {
+                    console.log('⚠️ [PLAY] Demasiados errores graves consecutivos, deteniendo reproducción');
                     if (global.lastTextChannel) {
                         global.lastTextChannel.send('❌ **Reproducción detenida**: Demasiadas canciones no disponibles consecutivamente. Intenta con otra playlist o álbum.');
                     }
@@ -520,13 +598,15 @@ async function startPlayback(voiceChannel, textChannel, song) {
                 
                 // Intentar reproducir la siguiente canción si hay alguna
                 if (global.musicQueue && global.musicQueue.length > 0) {
-                    console.log(`🔄 [PLAY] Intentando siguiente canción (${global.consecutiveErrors}/5 errores consecutivos)`);
+                    const retryDelay = isAbortedError ? 1000 : (isNetworkError ? 3000 : 2000);
+                    console.log(`🔄 [PLAY] Intentando siguiente canción en ${retryDelay}ms (${global.consecutiveErrors}/7 errores graves)`);
+                    
                     setTimeout(() => {
                         if (global.lastVoiceChannel && global.lastTextChannel) {
                             const nextSong = global.musicQueue.shift();
                             startPlayback(global.lastVoiceChannel, global.lastTextChannel, nextSong);
                         }
-                    }, 2000);
+                    }, retryDelay);
                 } else {
                     // Si no hay más canciones, reiniciar contador
                     global.consecutiveErrors = 0;
