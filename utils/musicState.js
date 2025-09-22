@@ -1,4 +1,5 @@
 const { AudioPlayerStatus } = require('@discordjs/voice');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 
 /**
  * Utilidades centralizadas para el manejo del estado de música
@@ -127,6 +128,64 @@ function getStateDebugInfo() {
     };
 }
 
+/**
+ * Crea los botones de control de música
+ * @returns {ActionRowBuilder} Fila de botones de control
+ */
+function createMusicControlButtons() {
+    return new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('music_skip')
+                .setLabel('⏭️ Skip')
+                .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId('music_pause')
+                .setLabel('⏸️ Pausar')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('music_resume')
+                .setLabel('▶️ Reanudar')
+                .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('music_queue')
+                .setLabel('📋 Cola')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('music_stop')
+                .setLabel('⏹️ Detener')
+                .setStyle(ButtonStyle.Danger)
+        );
+}
+
+/**
+ * Crea un embed con información de la canción actual y botones de control
+ * @param {Object} song - Información de la canción
+ * @param {string} title - Título del embed
+ * @returns {Object} Objeto con embed y componentes
+ */
+function createMusicEmbed(song, title = '🎵 Reproduciendo') {
+    const embed = new EmbedBuilder()
+        .setColor('#1DB954')
+        .setTitle(title)
+        .setDescription(`**${song.title}**${song.artist ? ` por ${song.artist}` : ''}`)
+        .addFields(
+            { name: '🎵 Fuente', value: song.source || 'Desconocida', inline: true },
+            { name: '📋 Cola', value: getQueueLength().toString() + ' canciones', inline: true }
+        )
+        .setTimestamp()
+        .setFooter({ text: 'Usa los botones para controlar la reproducción' });
+
+    if (song.spotifyUrl) {
+        embed.addFields({ name: '🔗 Spotify', value: '[Ver en Spotify](' + song.spotifyUrl + ')', inline: true });
+    }
+
+    return {
+        embeds: [embed],
+        components: [createMusicControlButtons()]
+    };
+}
+
 module.exports = {
     hasActiveMusic,
     isPlaying,
@@ -135,5 +194,7 @@ module.exports = {
     getCurrentSong,
     getQueueLength,
     clearMusicState,
-    getStateDebugInfo
+    getStateDebugInfo,
+    createMusicControlButtons,
+    createMusicEmbed
 };
