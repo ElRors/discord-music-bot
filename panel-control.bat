@@ -106,10 +106,10 @@ echo ║                      ⚙️  REGISTRANDO COMANDOS                      
 echo ╚══════════════════════════════════════════════════════════════════════════════════╝
 echo.
 echo ⏳ Limpiando comandos anteriores...
-node clear-commands.js
+node dev\clear-commands.js
 echo.
 echo ⏳ Registrando nuevos comandos...
-node deploy-commands.js
+node dev\deploy-commands.js
 echo.
 if %errorlevel%==0 (
     echo ✅ Comandos registrados exitosamente
